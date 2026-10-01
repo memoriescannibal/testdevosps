@@ -12,7 +12,7 @@ def test_index_exists_and_contains_html():
 
     assert "<!doctype html>" in content.lower()
     assert '<meta charset="utf-8">' in content.lower()
-    assert "<title>" in content.lower()
+    assert "<title>Mini service — static</title>" in content
 
 
 def test_404_exists():
