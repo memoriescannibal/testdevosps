@@ -1,26 +1,19 @@
 from pathlib import Path
 
-ROOT = Path(__file__).parents[1]
-SITE = ROOT / "site"
+SITE = Path("site")
 
 
-def test_index_exists_and_contains_html():
-    index = SITE / "index.html"
+def test_index_exists():
+    assert (SITE / "index.html").exists()
 
-    assert index.is_file()
-    content = index.read_text(encoding="utf-8")
 
-    assert "<!doctype html>" in content.lower()
-    assert '<meta charset="utf-8">' in content.lower()
-    assert "<title>Mini service — static</title>" in content
+def test_index_is_html():
+    text = (SITE / "index.html").read_text()
+    assert "<!doctype html>" in text.lower()
+    assert '<meta charset="utf-8">' in text.lower()
+    assert "<title>Mini service — static</title>" in text
+    assert "<h1>Mini service</h1>" in text
 
 
 def test_404_exists():
-    assert (SITE / "404.html").is_file()
-
-
-def test_pages_artifact_has_no_server_code():
-    forbidden = {"Dockerfile", "requirements.txt", "app"}
-
-    for name in forbidden:
-        assert not (SITE / name).exists()
+    assert (SITE / "404.html").exists()

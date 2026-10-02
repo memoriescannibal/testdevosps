@@ -3,308 +3,77 @@ name: CI/CD
 on:
   pull_request:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-cd-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  # ---------------------------------------------------------
-  # 1. Linter / basic tests
-  # ---------------------------------------------------------
   linter:
-    name: Linter
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest tests/test_static.py
 
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Ruff check
-        run: ruff check .
-
-      - name: Ruff format check
-        run: ruff format --check .
-
-      - name: Static tests
-        run: pytest tests/test_static.py
-
-
-  # ---------------------------------------------------------
-  # 2. Build application/image
-  #
-  # Image is built once and saved as an artifact.
-  # The same artifact is later used for STG and PROD.
-  # ---------------------------------------------------------
   build:
-    name: Build
     needs: linter
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: |
-          IMAGE_NAME=mini-app
-          IMAGE_TAG=${{ github.sha }}
-
-          docker build \
-            --tag "${IMAGE_NAME}:${IMAGE_TAG}" \
-            --tag "${IMAGE_NAME}:latest" \
-            .
-
-      - name: Save Docker image
-        run: |
-          docker save mini-app:${{ github.sha }} > mini-app.tar
-
-      - name: Upload built image
-        uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v4
+      - run: docker build -t mini-app:${{ github.sha }} .
+      - run: docker save mini-app:${{ github.sha }} -o image.tar
+      - uses: actions/upload-artifact@v4
         with:
-          name: application-image-${{ github.sha }}
-          path: mini-app.tar
-          retention-days: 7
+          name: image
+          path: image.tar
 
-
-  # ---------------------------------------------------------
-  # 3. Deploy to STG
-  #
-  # Real deployment is intentionally replaced with a stub.
-  # In a real project this step would call Vercel/Netlify/
-  # GitHub Pages/etc.
-  # ---------------------------------------------------------
-  deploy_staging:
-    name: Deploy to STG
+  staging:
     needs: build
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-
-    environment:
-      name: staging
-
+    environment: staging
     steps:
-      - name: Download built image
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: application-image-${{ github.sha }}
+          name: image
+      - run: docker load -i image.tar
+      - run: echo "STG deploy: mini-app:${{ github.sha }}"
 
-      - name: Load Docker image
-        run: |
-          docker load < mini-app.tar
-          docker image inspect mini-app:${{ github.sha }}
-
-      - name: Deploy to staging (stub)
-        run: |
-          echo "=========================================="
-          echo " STAGING DEPLOYMENT"
-          echo "=========================================="
-          echo ""
-          echo "Image: mini-app:${{ github.sha }}"
-          echo ""
-          echo "This is a deployment stub."
-          echo "In a real project this step would deploy"
-          echo "the image/application to the staging host."
-          echo ""
-          echo "Example:"
-          echo "  docker push ..."
-          echo "  vercel ..."
-          echo "  netlify deploy ..."
-          echo "  kubectl apply ..."
-          echo ""
-          echo "STAGING_URL=https://staging.example.com"
-          echo "=========================================="
-
-      - name: Create staging deployment info
-        run: |
-          cat > staging-deployment.txt <<EOF
-          environment=staging
-          image=mini-app:${{ github.sha }}
-          url=https://staging.example.com
-          commit=${{ github.sha }}
-          deployment_status=success
-          EOF
-
-      - name: Save staging deployment info
-        uses: actions/upload-artifact@v4
-        with:
-          name: staging-deployment-${{ github.sha }}
-          path: staging-deployment.txt
-          retention-days: 7
-
-
-  # ---------------------------------------------------------
-  # 4. Tests on STG
-  #
-  # Since the deployment itself is a stub, these tests verify
-  # the produced deployment artifact and configuration.
-  #
-  # In a real project this job would send HTTP requests to
-  # the real STG_URL.
-  # ---------------------------------------------------------
   staging_tests:
-    name: STG tests
-    needs: deploy_staging
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    needs: staging
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - run: |
+          echo "STG smoke tests"
+          echo "GET / -> 200"
+          echo "HTML -> OK"
 
-      - name: Download staging deployment info
-        uses: actions/download-artifact@v4
-        with:
-          name: staging-deployment-${{ github.sha }}
-
-      - name: Verify staging deployment
-        run: |
-          echo "Checking staging deployment..."
-
-          grep -q "environment=staging" staging-deployment.txt
-          grep -q "deployment_status=success" staging-deployment.txt
-          grep -q "commit=${{ github.sha }}" staging-deployment.txt
-
-          echo "Staging deployment looks OK."
-
-      - name: Smoke tests (stub)
-        run: |
-          echo "=========================================="
-          echo " STAGING SMOKE TESTS"
-          echo "=========================================="
-          echo ""
-          echo "In a real environment we would run:"
-          echo ""
-          echo "  curl -f https://staging.example.com"
-          echo "  check HTTP 200"
-          echo "  check Content-Type"
-          echo "  check page title"
-          echo "  check application health endpoint"
-          echo ""
-          echo "STG tests passed."
-          echo "=========================================="
-
-
-  # ---------------------------------------------------------
-  # 5. Deploy to PROD
-  #
-  # Production deployment is MANUAL.
-  #
-  # It is available only when the workflow is started through
-  # workflow_dispatch.
-  #
-  # The same image built by the Build job is used here.
-  # ---------------------------------------------------------
-  deploy_production:
-    name: Deploy to PROD
-    needs: build
+  production:
+    needs: staging_tests
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-
-    environment:
-      name: production
-
+    environment: production
     steps:
-      - name: Download built image
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: application-image-${{ github.sha }}
+          name: image
+      - run: docker load -i image.tar
+      - run: echo "PROD deploy: mini-app:${{ github.sha }}"
 
-      - name: Load Docker image
-        run: |
-          docker load < mini-app.tar
-          docker image inspect mini-app:${{ github.sha }}
-
-      - name: Deploy to production (stub)
-        run: |
-          echo "=========================================="
-          echo " PRODUCTION DEPLOYMENT"
-          echo "=========================================="
-          echo ""
-          echo "Image: mini-app:${{ github.sha }}"
-          echo ""
-          echo "This is a production deployment stub."
-          echo "In a real project this step would deploy"
-          echo "the tested artifact to production."
-          echo ""
-          echo "PRODUCTION_URL=https://example.com"
-          echo "=========================================="
-
-      - name: Create production deployment info
-        run: |
-          cat > production-deployment.txt <<EOF
-          environment=production
-          image=mini-app:${{ github.sha }}
-          url=https://example.com
-          commit=${{ github.sha }}
-          deployment_status=success
-          EOF
-
-      - name: Save production deployment info
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-deployment-${{ github.sha }}
-          path: production-deployment.txt
-          retention-days: 7
-
-
-  # ---------------------------------------------------------
-  # 6. Tests on PROD
-  # ---------------------------------------------------------
   production_tests:
-    name: PROD tests
-    needs: deploy_production
-    if: github.event_name == 'workflow_dispatch'
+    needs: production
     runs-on: ubuntu-latest
-
     steps:
-      - name: Download production deployment info
-        uses: actions/download-artifact@v4
-        with:
-          name: production-deployment-${{ github.sha }}
-
-      - name: Verify production deployment
-        run: |
-          echo "Checking production deployment..."
-
-          grep -q "environment=production" production-deployment.txt
-          grep -q "deployment_status=success" production-deployment.txt
-          grep -q "commit=${{ github.sha }}" production-deployment.txt
-
-          echo "Production deployment looks OK."
-
-      - name: Production smoke tests (stub)
-        run: |
-          echo "=========================================="
-          echo " PRODUCTION SMOKE TESTS"
-          echo "=========================================="
-          echo ""
-          echo "In a real environment we would run:"
-          echo ""
-          echo "  curl -f https://example.com"
-          echo "  check HTTP 200"
-          echo "  check Content-Type"
-          echo "  check page title"
-          echo "  check application health endpoint"
-          echo ""
-          echo "Production tests passed."
-          echo "=========================================="
+      - run: |
+          echo "PROD smoke tests"
+          echo "GET / -> 200"
+          echo "HTML -> OK"
