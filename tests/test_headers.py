@@ -4,7 +4,6 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-
 BASE_URL = os.getenv("BASE_URL")
 
 pytestmark = pytest.mark.skipif(
